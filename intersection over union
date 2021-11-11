@@ -1,0 +1,62 @@
+def IoU(proposals, bboxes):
+  """
+  Compute intersection over union between sets of bounding boxes.
+
+  Inputs:
+  - proposals: Proposals of shape (B, A, H', W', 4). These should be parametrized
+    as (xtl, ytl, xbr, ybr).
+  - bboxes: Ground-truth boxes from the DataLoader of shape (B, N, 5).
+    Each ground-truth box is represented as tuple (x_tl, y_tl, x_br, y_br, class).
+    If image i has fewer than N boxes, then bboxes[i] will be padded with extra
+    rows of -1.
+  
+  Outputs:
+  - iou_mat: IoU matrix of shape (B, A*H'*W', N) where iou_mat[b, i, n] gives
+    the IoU between one element of proposals[b] and bboxes[b, n].
+
+  
+  """
+ 
+
+  # Proposal_areas = None
+  # GT_areas = None
+
+  #############################################################################
+  # Compute the Intersection over Union (IoU) on proposals and GT boxes.#
+ 
+  # IoU = Area of Intersection / Area of Union, where                         #
+  # Area of Union = Area of Proposal + Area of BBox - Area of Intersection    #
+  # and the Area of Intersection can be computed using the top-left corner and#
+  # bottom-right corner of proposal and bbox. #
+  #############################################################################
+ #compute the xtl,ytl,xbr,ybr of intersection rectangle
+  [b,a,h,w,c] = proposals.size()
+  print("c",c)
+  
+  proposals = proposals.reshape(b,-1, 4) # B*M*4
+  proposals = proposals.unsqueeze(2).repeat(1,1,bboxes.size()[1],1)  # B*M*N*4
+  zeros_ = torch.zeros_like(bboxes)
+  bboxes = torch.max(bboxes[:,:,:], zeros_)  
+  bboxes = bboxes.unsqueeze(1).repeat(1,proposals.size()[1],1,1) #B*M*N*5
+  
+  int_xl = torch.max(proposals[:,:,:,0], bboxes[:,:,:,0])     
+  int_yl = torch.max(proposals[:,:,:,1], bboxes[:,:,:,1])
+  int_xr = torch.min(proposals[:,:,:,2], bboxes[:,:,:,2])
+  int_yr = torch.min(proposals[:,:,:,3], bboxes[:,:,:,3])
+  x_diff = int_xr - int_xl
+  y_diff = int_yr - int_yl
+  x_diff[x_diff < 0] = 0
+  y_diff[y_diff < 0] = 0
+  int_area = x_diff * y_diff
+    
+  Proposal_areas = (abs(proposals[:,:,:,2] - proposals[:,:,:,0])) * (abs(proposals[:,:,:,1] - proposals[:,:,:,3]))
+  GT_areas = (abs(bboxes[:,:,:,2] - bboxes[:,:,:,0])) * (abs(bboxes[:,:,:,1] - bboxes[:,:,:,3]))
+  const = abs(Proposal_areas + GT_areas - int_area)
+  iou_mat = torch.div(int_area, const)
+
+
+  #############################################################################
+  #                                                      #
+  #############################################################################
+
+  return iou_mat
