@@ -1,0 +1,52 @@
+def DetectionSolver(detector, train_loader, learning_rate=3e-3,
+                    lr_decay=1, num_epochs=20, **kwargs):
+  """
+  Run optimization to train the model.
+  """
+
+  # ship model to GPU
+  detector.to(**to_float_cuda)
+
+  # optimizer setup
+  from torch import optim
+  # optimizer = optim.Adam(
+  optimizer = optim.SGD(
+    filter(lambda p: p.requires_grad, detector.parameters()),
+    learning_rate) # leave betas and eps by default
+  lr_scheduler = optim.lr_scheduler.LambdaLR(optimizer,
+                                             lambda epoch: lr_decay ** epoch)
+
+  # sample minibatch data
+  loss_history = []
+  detector.train()
+  for i in range(num_epochs):
+    start_t = time.time()
+    for iter_num, data_batch in enumerate(train_loader):
+      images, boxes, w_batch, h_batch, _ = data_batch
+      resized_boxes = coord_trans(boxes, w_batch, h_batch, mode='p2a')
+      # print(resized_boxes)
+      images = images.to(**to_float_cuda)
+      resized_boxes = resized_boxes.to(**to_float_cuda)
+
+      loss = detector(images, resized_boxes)
+      optimizer.zero_grad()
+      loss.backward()
+      loss_history.append(loss.item())
+      optimizer.step()
+
+      print('(Iter {} / {})'.format(iter_num, len(train_loader)))
+
+    end_t = time.time()
+    print('(Epoch {} / {}) loss: {:.4f} time per epoch: {:.1f}s'.format(
+        i, num_epochs, loss.item(), end_t-start_t))
+
+    lr_scheduler.step()
+
+  # plot the training losses
+  plt.plot(loss_history)
+  plt.xlabel('Iteration')
+  plt.ylabel('Loss')
+  plt.title('Training loss history')
+  plt.show()
+
+  return loss_history
