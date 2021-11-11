@@ -1,0 +1,98 @@
+class PredictionNetwork(nn.Module):
+  def __init__(self, in_dim, hidden_dim=128, num_bboxes=2, num_classes=20, drop_ratio=0.3):
+    super().__init__()
+
+    assert(num_classes != 0 and num_bboxes != 0)
+    self.num_classes = num_classes
+    self.num_bboxes = num_bboxes
+
+    # Here we set up a network that will predict outputs for all bounding boxes.
+    # This network has a 1x1 convolution layer with `hidden_dim` filters, 
+    # followed by a Dropout layer with `p=drop_ratio`, a Leaky ReLU 
+    # nonlinearity, and finally another 1x1 convolution layer to predict all
+    # outputs. The network is stored in `self.net`, and has shape 
+    # (B, 5*A+C, 7, 7), where the 5 predictions are in the order 
+    # (x, y, w, h, conf_score), with A = `self.num_bboxes`
+    # and C = `self.num_classes`.                                 
+    
+    self.in_dim = in_dim
+    self.hidden_dim = hidden_dim
+    self.drop_ratio = drop_ratio
+    out_dim = 5*self.num_bboxes + self.num_classes
+
+    layers = [
+        torch.nn.Conv2d(self.in_dim, self.hidden_dim, kernel_size=1),
+        torch.nn.Dropout(p=self.drop_ratio),
+        torch.nn.LeakyReLU(negative_slope=0.2),
+        torch.nn.Conv2d(self.hidden_dim,out_dim,kernel_size=1),
+    ]
+    self.net = nn.Sequential(*layers)
+
+  def forward(self, features):
+    """
+    Run the forward pass of the network to predict outputs given features
+    from the backbone network.
+
+    Inputs:
+    - features: Tensor of shape (B, in_dim, 7, 7) giving image features computed
+      by the backbone network.
+
+    Outputs:
+    - bbox_xywh: Tensor of shape (B, A, 4, H, W) giving predicted offsets for 
+      all bounding boxes.
+    - conf_scores: Tensor of shape (B, A, H, W) giving predicted classification
+      scores for all bounding boxes.
+    - cls_scores: Tensor of shape (B, C, H, W) giving classification scores for
+      each spatial position.
+    """
+    bbox_xywh, conf_scores, cls_scores = None, None, None
+    
+    ###########################################################################
+    #  the forward pass of the PredictionNetwork.              #
+    # - Use features to predict bbox_xywh (offsets), conf_scores, and         #
+    # class_scores.                                                           #
+    # - Make sure conf_scores is between 0 and 1 by squashing the             #
+    # network output with a sigmoid.                                          #
+    # - The first two elements t^x and t^y of offsets should be between -0.5  #
+    # and 0.5.                                                    #
+    # - The last two elements of bbox_xywh w and h should be normalized,      #
+    # i.e. squashed with a sigmoid between 0 and 1.                           #
+    #                                                                         #
+    # Note: In the 5A+C dimension, the first 5*A would be bounding box        # 
+    # offsets, and next C will be class scores.                               #
+    ###########################################################################
+    self.features = features
+    batch = self.features.size()[0]
+    y = self.features
+    X = self.net(y)
+   
+    x = X.clone()
+    a = self.num_bboxes
+    print("size of output from net",x.size())
+
+    bbox_xywh_ = (x[:, :5*a, :,:])
+    bbox_xywh_ = bbox_xywh_.view(batch, a, -1, x.size()[2], x.size()[3])
+    bbox_xywh = bbox_xywh_[:,:,1:5,:,:]
+    
+    bbox_xywh[:,:,0:2,:,:] = torch.sigmoid(bbox_xywh[:,:,0:2,:,:]) - 0.5
+    bbox_xywh[:,:,2:4,:,:] = torch.sigmoid(bbox_xywh[:,:,2:4,:,:])
+    conf_scores = bbox_xywh_[:,:,0,:,:]
+    conf_scores = conf_scores.view(batch,a,x.size()[2], x.size()[3])
+    conf_scores = torch.sigmoid(conf_scores)
+
+    cls_scores = (x[:,5*a:,:,:]).view(batch, -1, x.size()[2], x.size()[3])
+
+      
+    ###########################################################################
+   
+    
+    
+    # You can uncomment these lines when training for a few iterations to 
+    # check if your offets are within the expected bounds.
+    
+    # print("Checking offset bounds in Prediction Network...")
+    # assert bbox_xywh[:, :, 0:2].max() <= 0.5 and bbox_xywh[:, :, 0:2].min() >= -0.5, 'invalid offsets (x, y) values'
+    # assert bbox_xywh[:, :, 2:4].max() <= 1 and bbox_xywh[:, :, 2:4].min() >= 0, 'invalid offsets (w, h) values'
+    # print("Check passed!")
+
+    return bbox_xywh, conf_scores, cls_scores
