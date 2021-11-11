@@ -1,0 +1,67 @@
+def nms(boxes, scores, iou_threshold=0.5, topk=None):
+  """
+  Non-maximum suppression removes overlapping bounding boxes.
+
+  Inputs:
+  - boxes: top-left and bottom-right coordinate values of the bounding boxes
+    to perform NMS on, of shape Nx4
+  - scores: scores for each one of the boxes, of shape N
+  - iou_threshold: discards all overlapping boxes with IoU > iou_threshold; float
+  - topk: If this is not None, then return only the topk highest-scoring boxes.
+    Otherwise if this is None, then return all boxes that pass NMS.
+
+  Outputs:
+  - keep: torch.long tensor with the indices of the elements that have been
+    kept by NMS, sorted in decreasing order of scores; of shape [num_kept_boxes]
+  """
+
+  if (not boxes.numel()) or (not scores.numel()):
+    return torch.zeros(0, dtype=torch.long)
+
+  keep = []
+  temp = []
+  #############################################################################
+  # non-maximum suppression which iterates the following:     #
+  #       1. Select the highest-scoring box among the remaining ones,         #
+  #          which has not been chosen in this step before                    #
+  #       2. Eliminate boxes with IoU > threshold                             #
+  #       3. If any boxes remain, GOTO 1                                      #
+  #       Your implementation should not depend on a specific device type;    #
+  #       you can use the device of the input if necessary.                   #
+  #############################################################################
+  xl = boxes[:,0]
+  yl = boxes[:,1]
+  xr = boxes[:,2]
+  yr = boxes[:,3]
+  areas = (xr - xl) * (yr - yl)
+  scores_arranged = torch.argsort(scores)
+  #finding bounding box with highest score
+  while len(scores_arranged) > 0:
+    i = scores_arranged[-1]
+    temp.append(i)
+    scores_arranged = scores_arranged[:-1]
+    if len(scores_arranged) == 0:
+      break
+    #extracting coordinates of the boxes as per the argsort
+    xxl =torch.max(xl[scores_arranged], xl[i])      #torch.index_select(xl, dim =0, index = scores_arranged)
+    xxr =torch.max(xr[scores_arranged], xr[i])      #torch.index_select(xr, dim=0, index = scores_arranged)
+    yyl =torch.max(yl[scores_arranged], yl[i])      #torch.index_select(yl, dim=0, index = scores_arranged)
+    yyr =torch.max(yr[scores_arranged], yr[i])      #torch.index_select(yr, dim=0, index = scores_arranged)
+
+    x_dif = xxr - xxl
+    y_dif = yyr - yyl
+    x_dif = (xxr-xxl).clamp(min=0.0)
+    y_dif = (yyr-yyl).clamp(min=0.0)
+    area = (x_dif * y_dif).to(torch.float)
+    remaining = areas[scores_arranged]
+    U = (remaining - area) + areas[i]
+    IOU = area/U
+    filter = IOU <= iou_threshold
+    scores_arranged = scores_arranged[filter]
+  
+  if topk is not None:
+    keep = torch.tensor(temp[:topk])
+  else:
+    keep = torch.tensor(temp)
+  
+  return keep
