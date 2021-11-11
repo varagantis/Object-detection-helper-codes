@@ -1,0 +1,41 @@
+def GenerateGrid(batch_size, w_amap=7, h_amap=7, dtype=torch.float32, device='cuda'):
+  """
+  Return a grid cell given a batch size (center coordinates).
+
+  Inputs:
+  - batch_size, B
+  - w_amap: or W', width of the activation map (number of grids in the horizontal dimension)
+  - h_amap: or H', height of the activation map (number of grids in the vertical dimension)
+  - W' and H' are always 7 in our case while w and h might vary.
+  
+  Outputs:
+  grid: A float32 tensor of shape (B, H', W', 2) giving the (x, y) coordinates
+        of the centers of each feature for a feature map of shape (B, D, H', W')
+  """
+  w_range = torch.arange(0, w_amap, dtype=dtype, device=device) + 0.5
+  h_range = torch.arange(0, h_amap, dtype=dtype, device=device) + 0.5
+
+  w_grid_idx = w_range.unsqueeze(0).repeat(h_amap, 1)
+  h_grid_idx = h_range.unsqueeze(1).repeat(1, w_amap)
+  grid = torch.stack([w_grid_idx, h_grid_idx], dim=-1)
+  grid = grid.unsqueeze(0).repeat(batch_size, 1, 1, 1)
+
+  return grid
+
+
+# visualization
+# simply create an activation grid where the cells are in green and the centers in red
+# you should see the entire image divided by a 7x7 grid, with no gaps on the edges
+
+grid_list = GenerateGrid(w_list.shape[0])
+
+center = torch.cat((grid_list, grid_list), dim=-1)
+grid_cell = center.clone()
+grid_cell[:, :, :, [0, 1]] -= 1. / 2.
+grid_cell[:, :, :, [2, 3]] += 1. / 2.
+center = coord_trans(center, w_list, h_list)
+grid_cell = coord_trans(grid_cell, w_list, h_list)
+print(grid_cell.shape, center.shape)
+
+for img, anc, grid in zip(img_list, center, grid_cell):
+  data_visualizer(img, idx_to_class, anc.reshape(-1, 4), grid.reshape(-1, 4))
