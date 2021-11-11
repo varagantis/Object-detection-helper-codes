@@ -1,0 +1,103 @@
+def ReferenceOnActivatedBboxes(bboxes, gt_bboxes, grid, iou_mat, pos_thresh=0.7, neg_thresh=0.3):
+  """
+  Determine the activated (positive) and negative bboxes for model training.
+
+  A grid cell is responsible for predicting a GT box if the center of
+  the box falls into that cell.
+  Implementation details: First compute manhattan distance between grid cell centers
+  (BxH’xW’) and GT box centers (BxN). This gives us a matrix of shape Bx(H'xW')xN and
+  perform torch.min(dim=1)[1] on it gives us the indexes indicating activated grids
+  responsible for GT boxes (convert to x and y). Among all the bboxes associated with
+  the activate grids, the bbox with the largest IoU with the GT box is responsible to
+  predict (regress to) the GT box.
+  Note: One bbox might match multiple GT boxes.
+
+  Main steps include:
+  i) Decide activated and negative bboxes based on the IoU matrix.
+  ii) Compute GT confidence score/offsets/object class on the positive proposals.
+  iii) Compute GT confidence score on the negative proposals.
+  
+  Inputs:
+  - bboxes: Bounding boxes, of shape BxAxH’xW’x4
+  - gt_bboxes: GT boxes of shape BxNx5, where N is the number of PADDED GT boxes,
+            5 indicates (x_{lr}^{gt}, y_{lr}^{gt}, x_{rb}^{gt}, y_{rb}^{gt}) and class index
+  - grid (float): A cell grid of shape BxH'xW'x2 where 2 indicate the (x, y) coord
+  - iou_mat: IoU matrix of shape Bx(AxH’xW’)xN
+  - pos_thresh: Positive threshold value
+  - neg_thresh: Negative threshold value
+
+  Outputs:
+  - activated_anc_ind: Index on activated bboxes, of shape M, where M indicates the 
+                       number of activated bboxes
+  - negative_anc_ind: Index on negative bboxes, of shape M
+  - GT_conf_scores: GT IoU confidence scores on activated bboxes, of shape M
+  - GT_offsets: GT offsets on activated bboxes, of shape Mx4. They are denoted as
+                \hat{t^x}, \hat{t^y}, \hat{t^w}, \hat{t^h} in the formulation earlier.
+  - GT_class: GT class category on activated bboxes, essentially indexed from gt_bboxes[:, :, 4],
+              of shape M
+  - activated_anc_coord: Coordinates on activated bboxes (mainly for visualization purposes)
+  - negative_anc_coord: Coordinates on negative bboxes (mainly for visualization purposes)
+  """
+
+
+  B, A, h_amap, w_amap, _ = bboxes.shape
+  N = gt_bboxes.shape[1]
+
+  # activated/positive bboxes
+  max_iou_per_anc, max_iou_per_anc_ind = iou_mat.max(dim=-1)
+
+  bbox_mask = (gt_bboxes[:, :, 0] != -1) # BxN, indicate invalid boxes
+  bbox_centers = (gt_bboxes[:, :, 2:4] - gt_bboxes[:, :, :2]) / 2. + gt_bboxes[:, :, :2] # BxNx2
+
+  mah_dist = torch.abs(grid.view(B, -1, 2).unsqueeze(2) - bbox_centers.unsqueeze(1)).sum(dim=-1) # Bx(H'xW')xN
+  min_mah_dist = mah_dist.min(dim=1, keepdim=True)[0] # Bx1xN
+  grid_mask = (mah_dist == min_mah_dist).unsqueeze(1) # Bx1x(H'xW')xN
+
+  reshaped_iou_mat = iou_mat.view(B, A, -1, N)
+  anc_with_largest_iou = reshaped_iou_mat.max(dim=1, keepdim=True)[0] # Bx1x(H’xW’)xN
+  anc_mask = (anc_with_largest_iou == reshaped_iou_mat) # BxAx(H’xW’)xN
+  activated_anc_mask = (grid_mask & anc_mask).view(B, -1, N)
+  activated_anc_mask &= bbox_mask.unsqueeze(1)
+  
+  # one bbox could match multiple GT boxes
+  activated_anc_ind = torch.nonzero(activated_anc_mask.view(-1)).squeeze(-1)
+  GT_conf_scores = iou_mat.view(-1)[activated_anc_ind]
+  gt_bboxes = gt_bboxes.view(B, 1, N, 5).repeat(1, A*h_amap*w_amap, 1, 1).view(-1, 5)[activated_anc_ind]
+  GT_class = gt_bboxes[:, 4].long()
+  gt_bboxes = gt_bboxes[:, :4]
+  activated_anc_ind = (activated_anc_ind.float() / activated_anc_mask.shape[-1]).long()
+
+  print('number of pos proposals: ', activated_anc_ind.shape[0])
+  
+  activated_anc_coord = bboxes.reshape(-1, 4)[activated_anc_ind]
+  
+  activated_grid_coord = grid.repeat(1,A,1,1,1).reshape(-1, 2)[activated_anc_ind]
+
+  # GT offsets
+  
+  # bbox are x_tl, y_tl, x_br, y_br
+  # offsets are t_x, t_y, t_w, t_h
+
+  # Grid: (B, H, W, 2) -> This will be used to calculate center offsets
+  # w, h offsets are not offsets but normalized w,h themselves.
+  
+  wh_offsets = torch.sqrt((gt_bboxes[:, 2:4] - gt_bboxes[:, :2])/7.)
+  assert torch.max((gt_bboxes[:, 2:4] - gt_bboxes[:, :2])/7.) <= 1, "w and h targets not normalised, should be between 0 and 1"
+
+  xy_offsets = (gt_bboxes[:, :2] + gt_bboxes[:, 2:4])/(2.) - activated_grid_coord
+  
+  assert torch.max(torch.abs(xy_offsets)) <= 0.5, \
+    "x and y offsets should be between -0.5 and 0.5! Got {}".format( \
+    torch.max(torch.abs(xy_offsets)))
+
+  GT_offsets = torch.cat((xy_offsets, wh_offsets), dim=-1)
+
+  # negative bboxes
+  negative_anc_mask = (max_iou_per_anc < neg_thresh) # Bx(AxH’xW’)
+  negative_anc_ind = torch.nonzero(negative_anc_mask.view(-1)).squeeze(-1)
+  negative_anc_ind = negative_anc_ind[torch.randint(0, negative_anc_ind.shape[0], (activated_anc_ind.shape[0],))]
+  negative_anc_coord = bboxes.reshape(-1, 4)[negative_anc_ind.view(-1)]
+  
+  # activated_anc_coord and negative_anc_coord are mainly for visualization purposes
+  return activated_anc_ind, negative_anc_ind, GT_conf_scores, GT_offsets, GT_class, \
+         activated_anc_coord, negative_anc_coord
