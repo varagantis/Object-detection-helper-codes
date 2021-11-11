@@ -1,0 +1,63 @@
+def ConfScoreRegression(conf_scores, GT_conf_scores):
+  """
+  Use sum-squared error as in YOLO
+
+  Inputs:
+  - conf_scores: Predicted confidence scores
+  - GT_conf_scores: GT confidence scores
+  
+  Outputs:
+  - conf_score_loss
+  """
+  # the target conf_scores for negative samples are zeros
+  GT_conf_scores = torch.cat((torch.ones_like(GT_conf_scores), \
+                              torch.zeros_like(GT_conf_scores)), dim=0).view(-1, 1)
+  
+  conf_score_loss = torch.sum((conf_scores - GT_conf_scores)**2) * 1. / GT_conf_scores.shape[0]
+  return conf_score_loss
+def BboxRegression(offsets, GT_offsets):
+  """"
+  Use sum-squared error as in YOLO
+  For both xy and wh.
+  NOTE: In YOLOv1, the authors use sqrt(w) and sqrt(h) for normalized w and h
+  (read paper for more details) and thus both offsets and GT_offsets will 
+  be having (x, y, sqrt(w), sqrt(h)) parametrization of the coodinates. 
+
+
+  Inputs:
+  - offsets: Predicted box offsets
+  - GT_offsets: GT box offsets
+  
+  Outputs:
+  - bbox_reg_loss
+  """
+
+  bbox_reg_loss = torch.sum((offsets - GT_offsets)**2) * 1. / GT_offsets.shape[0]
+  return bbox_reg_loss
+def ObjectClassification(class_prob, GT_class, batch_size, anc_per_img, activated_anc_ind):
+  """"
+  Use softmax loss
+
+  Inputs:
+  - class_prob: Predicted class logits
+  - GT_class: GT box class label
+  - batch_size: the batch size to compute loss over
+  - anc_per_img: anchor indices for each image
+  - activated_anc_ind: indices for positive anchors
+  
+  Outputs:
+  - object_cls_loss, the classification loss for object detection
+  """
+  # average within sample and then average across batch
+  # such that the class pred would not bias towards dense popular objects like `person`
+
+  all_loss = F.cross_entropy(class_prob, GT_class, reduction='none') # , reduction='sum') * 1. / batch_size
+  object_cls_loss = 0
+  for idx in range(batch_size):
+    anc_ind_in_img = (activated_anc_ind >= idx * anc_per_img) & (activated_anc_ind < (idx+1) * anc_per_img)
+    object_cls_loss += all_loss[anc_ind_in_img].sum() * 1. / torch.sum(anc_ind_in_img)
+  object_cls_loss /= batch_size
+  # object_cls_loss = F.cross_entropy(class_prob, GT_class, reduction='sum') * 1. / batch_size
+
+  return object_cls_loss
+  
